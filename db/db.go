@@ -1,4 +1,4 @@
-package main
+package db 
 
 import (
 	"database/sql"
@@ -7,20 +7,20 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var db *sql.DB
+var DB *sql.DB
 
-func initDB() {
+func InitDB() {
 	var err error
 
 	// adjust user/password/host if needed
 	dsn := "host=localhost port=5432 user=postgres password=postgres dbname=patient sslmode=disable"
 
-	db, err = sql.Open("postgres", dsn)
+	DB, err = sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err = db.Ping(); err != nil {
+	if err = DB.Ping(); err != nil {
 		log.Fatal(err)
 	}
 

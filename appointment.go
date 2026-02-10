@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+        "patienttracker/db"
 )
 
 type AppointmentRequest struct {
@@ -78,7 +79,7 @@ func createDoctorAppointment(w http.ResponseWriter, r *http.Request) {
 
 	var appointmentID int64
 
-	err = db.QueryRow(
+	err = db.DB.QueryRow(
 		query,
 		req.PatientName,
 		req.BirthPlace,
