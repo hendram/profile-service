@@ -1,21 +1,18 @@
 package handlers
 
 import (
-    "crypto/hmac"
-    "crypto/sha256"
-    "encoding/base64"
+    "database/sql"
     "encoding/json"
-    "fmt"
     "net/http"
-    "os"
-    "strconv"
-    "strings"
     "time"
 
     "patienttracker/db"
+    "patienttracker/helpers"
 )
 
 func VerifyHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+
     var req struct {
         Code string `json:"code"`
     }
@@ -25,54 +22,77 @@ func VerifyHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    decoded, err := base64.StdEncoding.DecodeString(req.Code)
-    if err != nil {
-        http.Error(w, "Invalid code", http.StatusUnauthorized)
+    if req.Code == "" {
+        http.Error(w, "Verification code required", http.StatusBadRequest)
         return
     }
 
-    parts := strings.Split(string(decoded), "|")
-    if len(parts) != 3 {
-        http.Error(w, "Invalid code format", http.StatusUnauthorized)
+    var signupID int
+    var email string
+    var userType string
+    var expiresAt time.Time
+
+    err := db.DB.QueryRow(`
+        SELECT s.id, s.email, s.user_type, v.expires_at
+        FROM signup s
+        JOIN email_verifications v ON s.id = v.signup_id
+        WHERE v.verification_code = $1
+    `, req.Code).Scan(&signupID, &email, &userType, &expiresAt)
+
+    if err == sql.ErrNoRows {
+        http.Error(w, "Invalid verification code", http.StatusUnauthorized)
         return
     }
-
-    email := parts[0]
-    tsStr := parts[1]
-    sigHex := parts[2]
-
-    ts, err := strconv.ParseInt(tsStr, 10, 64)
-    if err != nil {
-        http.Error(w, "Invalid timestamp", http.StatusUnauthorized)
-        return
-    }
-
-    if time.Now().Unix()-ts > 300 {
-        http.Error(w, "Code expired", http.StatusUnauthorized)
-        return
-    }
-
-    secret := []byte(os.Getenv("VERIFY_SECRET"))
-    payload := fmt.Sprintf("%s|%s", email, tsStr)
-
-    mac := hmac.New(sha256.New, secret)
-    mac.Write([]byte(payload))
-    expectedSig := fmt.Sprintf("%x", mac.Sum(nil))
-
-    if !hmac.Equal([]byte(sigHex), []byte(expectedSig)) {
-        http.Error(w, "Invalid signature", http.StatusUnauthorized)
-        return
-    }
-
-    // ✅ FIXED: use db.DB
-    _, err = db.DB.Exec(`
-        UPDATE signup SET is_verified = TRUE WHERE email = $1
-    `, email)
 
     if err != nil {
-        http.Error(w, "User not found or server error", http.StatusInternalServerError)
+        http.Error(w, "Server error", http.StatusInternalServerError)
         return
     }
 
-    w.WriteHeader(http.StatusOK)
+    if time.Now().After(expiresAt) {
+        http.Error(w, "Verification code expired", http.StatusUnauthorized)
+        return
+    }
+
+    tx, err := db.DB.Begin()
+    if err != nil {
+        http.Error(w, "Server error", http.StatusInternalServerError)
+        return
+    }
+    defer tx.Rollback()
+
+    _, err = tx.Exec(`
+        UPDATE signup
+        SET is_verified = TRUE
+        WHERE id = $1
+    `, signupID)
+    if err != nil {
+        http.Error(w, "Failed to verify user", http.StatusInternalServerError)
+        return
+    }
+
+    _, err = tx.Exec(`
+        DELETE FROM email_verifications
+        WHERE signup_id = $1
+    `, signupID)
+    if err != nil {
+        http.Error(w, "Failed to clean verification code", http.StatusInternalServerError)
+        return
+    }
+
+    if err := tx.Commit(); err != nil {
+        http.Error(w, "Server error", http.StatusInternalServerError)
+        return
+    }
+
+    token, err := helpers.GenerateJWT(email, userType)
+    if err != nil {
+        http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+        return
+    }
+
+    json.NewEncoder(w).Encode(map[string]string{
+        "email": email,
+        "token": token,
+    })
 }

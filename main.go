@@ -7,11 +7,12 @@ import (
     "patienttracker/handlers"
     "patienttracker/middleware"
     "patienttracker/db"
+    "patienttracker/env"
 )
 
 func main() {
     // ✅ app-level init
-    LoadEnv()
+    env.LoadEnv()
     db.InitDB()
 
     mux := http.NewServeMux()

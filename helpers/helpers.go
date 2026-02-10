@@ -1,17 +1,18 @@
 package helpers
 
 import (
-    "crypto/hmac"
-    "crypto/sha256"
-    "encoding/base64"
+    "crypto/tls"
+    "crypto/rand"
+    "math/big"
     "fmt"
     "net/smtp"
+    "net"
     "os"
     "time"
-
+    "log"
     "github.com/golang-jwt/jwt/v5"
     "golang.org/x/crypto/bcrypt"
-)
+   )
 
 
 func HashPassword(password string) string {
@@ -26,11 +27,18 @@ func HashPassword(password string) string {
 }
 
 func CheckPasswordHash(password, hash string) bool {
-    return bcrypt.CompareHashAndPassword(
+    err := bcrypt.CompareHashAndPassword(
         []byte(hash),
         []byte(password),
-    ) == nil
+    )
+
+    ok := err == nil
+
+    log.Printf("CheckPasswordHash result=%v err=%v", ok, err)
+
+    return ok
 }
+
 
 func GenerateJWT(email, usertype string) (string, error) {
     secret := []byte(os.Getenv("JWT_SECRET"))
@@ -46,30 +54,18 @@ func GenerateJWT(email, usertype string) (string, error) {
     return token.SignedString(secret)
 }
 
-func GenerateVerificationCode(email string) string {
-    secret := []byte(os.Getenv("VERIFY_SECRET"))
-
-    ts := time.Now().Unix()
-    payload := fmt.Sprintf("%s|%d", email, ts)
-
-    mac := hmac.New(sha256.New, secret)
-    mac.Write([]byte(payload))
-    sig := fmt.Sprintf("%x", mac.Sum(nil))
-
-    raw := fmt.Sprintf("%s|%d|%s", email, ts, sig)
-    return base64.StdEncoding.EncodeToString([]byte(raw))
+func GenerateVerificationCode(_ string) string {
+    n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
+    return fmt.Sprintf("%06d", n.Int64())
 }
+
 
 func SendVerificationEmail(toEmail, code string) error {
     host := "smtp-relay.brevo.com"
     port := "587"
+    addr := net.JoinHostPort(host, port)
 
-    auth := smtp.PlainAuth(
-        "",
-        "apikey",
-        os.Getenv("BREVO_SMTP_KEY"),
-        host,
-    )
+    auth := smtp.PlainAuth("", os.Getenv("USERNAME"), os.Getenv("BREVO_SMTP_KEY"), host)
 
     msg := []byte(
         "From: greeny.bignose@gmail.com\r\n" +
@@ -81,11 +77,65 @@ func SendVerificationEmail(toEmail, code string) error {
             "\n\nThis code expires in 5 minutes.\r\n",
     )
 
-    return smtp.SendMail(
-        host+":"+port,
-        auth,
-        "greeny.bignose@gmail.com",
-        []string{toEmail},
-        msg,
-    )
+    // Connect to server with timeout
+    conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+    if err != nil {
+        log.Println("SMTP dial failed:", err)
+        return err
+    }
+    defer conn.Close()
+
+    c, err := smtp.NewClient(conn, host)
+    if err != nil {
+        log.Println("SMTP client creation failed:", err)
+        return err
+    }
+    defer c.Quit()
+
+    // Upgrade to TLS
+    tlsconfig := &tls.Config{
+        ServerName: host,
+    }
+    if err = c.StartTLS(tlsconfig); err != nil {
+        log.Println("SMTP STARTTLS failed:", err)
+        return err
+    }
+
+    // Authenticate
+    if err = c.Auth(auth); err != nil {
+        log.Println("SMTP auth failed:", err)
+        return err
+    }
+
+    // Send email
+    if err = c.Mail("greeny.bignose@gmail.com"); err != nil {
+        log.Println("SMTP MAIL FROM failed:", err)
+        return err
+    }
+
+    if err = c.Rcpt(toEmail); err != nil {
+        log.Println("SMTP RCPT TO failed:", err)
+        return err
+    }
+
+    w, err := c.Data()
+    if err != nil {
+        log.Println("SMTP DATA failed:", err)
+        return err
+    }
+
+    _, err = w.Write(msg)
+    if err != nil {
+        log.Println("SMTP write failed:", err)
+        return err
+    }
+
+    err = w.Close()
+    if err != nil {
+        log.Println("SMTP close failed:", err)
+        return err
+    }
+
+    log.Println("Email sent successfully to", toEmail)
+    return nil
 }

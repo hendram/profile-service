@@ -5,8 +5,8 @@ import (
     "encoding/json"
     "net/http"
 
-    "patienttracker/helpers"
     "patienttracker/db"
+    "patienttracker/helpers"
 )
 
 type SigninRequest struct {
@@ -15,6 +15,8 @@ type SigninRequest struct {
 }
 
 func SigninHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+
     var req SigninRequest
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -22,17 +24,16 @@ func SigninHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     var hash string
-    var usertype string
+    var userType string
     var verified bool
 
     err := db.DB.QueryRow(`
-        SELECT password_hash, usertype, is_verified
+        SELECT password_hash, user_type, is_verified
         FROM signup
         WHERE email = $1
-    `, req.Email).Scan(&hash, &usertype, &verified)
+    `, req.Email).Scan(&hash, &userType, &verified)
 
-    if err == sql.ErrNoRows ||
-        !helpers.CheckPasswordHash(req.Password, hash) {
+    if err == sql.ErrNoRows {
         http.Error(w, "Invalid email or password", http.StatusUnauthorized)
         return
     }
@@ -42,12 +43,17 @@ func SigninHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    if !helpers.CheckPasswordHash(req.Password, hash) {
+        http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+        return
+    }
+
     if !verified {
         http.Error(w, "Email not verified", http.StatusForbidden)
         return
     }
 
-    token, err := helpers.GenerateJWT(req.Email, usertype)
+    token, err := helpers.GenerateJWT(req.Email, userType)
     if err != nil {
         http.Error(w, "Failed to generate token", http.StatusInternalServerError)
         return
@@ -58,4 +64,3 @@ func SigninHandler(w http.ResponseWriter, r *http.Request) {
         "token": token,
     })
 }
-
