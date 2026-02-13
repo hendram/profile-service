@@ -39,20 +39,32 @@ func CheckPasswordHash(password, hash string) bool {
     return ok
 }
 
-
-func GenerateJWT(email, usertype string) (string, error) {
+func GenerateJWT(userID int, email string, role string) (string, error) {
     secret := []byte(os.Getenv("JWT_SECRET"))
 
+    if len(secret) == 0 {
+        return "", fmt.Errorf("missing JWT_SECRET env")
+    }
+
+    if role == "" {
+        return "", fmt.Errorf("empty role not allowed")
+    }
+
     claims := jwt.MapClaims{
+        "sub":   userID,
         "email": email,
-        "role":  usertype,
+        "role":  role,
+        "iss":   "onlineshop-api",
+        "aud":   "onlineshop-client",
         "exp":   time.Now().Add(24 * time.Hour).Unix(),
         "iat":   time.Now().Unix(),
+        "nbf":   time.Now().Unix(),
     }
 
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
     return token.SignedString(secret)
 }
+
 
 func GenerateVerificationCode(_ string) string {
     n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
