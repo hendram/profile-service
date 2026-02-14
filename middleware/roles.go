@@ -4,24 +4,30 @@ import "net/http"
 
 func RequireRoles(allowed ...string) func(http.Handler) http.Handler {
 
-    allowedMap := map[string]bool{}
-    for _, r := range allowed {
-        allowedMap[r] = true
-    }
+	allowedMap := map[string]bool{}
+	for _, r := range allowed {
+		allowedMap[r] = true
+	}
 
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-            roles := r.Context().Value(ContextRoles).([]string)
+			val := r.Context().Value(ContextRoles)
+			if val == nil {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 
-            for _, role := range roles {
-                if allowedMap[role] {
-                    next.ServeHTTP(w, r)
-                    return
-                }
-            }
+			roles := val.([]string)
 
-            http.Error(w, "Forbidden", http.StatusForbidden)
-        })
-    }
+			for _, role := range roles {
+				if allowedMap[role] {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			http.Error(w, "Forbidden", http.StatusForbidden)
+		})
+	}
 }
