@@ -1,4 +1,4 @@
-module patienttracker
+module onlineshop
 
 go 1.21.13
 

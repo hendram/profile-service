@@ -4,10 +4,10 @@ import (
     "log"
     "net/http"
 
-    "patienttracker/handlers"
-    "patienttracker/middleware"
-    "patienttracker/db"
-    "patienttracker/env"
+    "onlineshop/handlers"
+    "onlineshop/middleware"
+    "onlineshop/db"
+    "onlineshop/env"
 )
 
 func main() {

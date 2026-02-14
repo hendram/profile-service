@@ -1,154 +1,150 @@
 package handlers
 
 import (
-    "database/sql"
-    "encoding/json"
-    "log"
-    "net/http"
-    "strings"
-
-    "patienttracker/db"
-    "patienttracker/helpers"
+	"database/sql"
+	"encoding/json"
+	"log"
+	"net/http"
+	"onlineshop/db"
+	"onlineshop/helpers"
 )
 
 type SignupRequest struct {
-    Email    string   `json:"email"`
-    Password string   `json:"password"`
-    Roles    []string `json:"roles"` // optional
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	UserType string `json:"usertype"` // single string
 }
 
 func SignupHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 
-    fail := func(stage string, err error) {
-        log.Printf("[SIGNUP ERROR] stage=%s err=%v\n", stage, err)
-        http.Error(w, "Signup failed", http.StatusBadRequest)
-    }
+	fail := func(stage string, err error) {
+		if err != nil {
+			log.Printf("[SIGNUP ERROR] stage=%s err=%v\n", stage, err)
+		} else {
+			log.Printf("[SIGNUP ERROR] stage=%s\n", stage)
+		}
+		http.Error(w, "Signup failed: "+stage, http.StatusBadRequest)
+	}
 
-    var req SignupRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        fail("decode_json", err)
-        return
-    }
+	var req SignupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Println("[LOG] Invalid JSON")
+		fail("Signup error", err)
+		return
+	}
 
-    if req.Email == "" || req.Password == "" {
-        fail("missing_fields", nil)
-        return
-    }
+	if req.Email == "" || req.Password == "" || req.UserType == "" {
+		fail("Signup error", nil)
+		return
+	}
 
-    // timing attack mitigation
-    _ = helpers.HashPassword(req.Password)
+	log.Printf("[LOG] Signup request: email=%s, usertype=%s\n", req.Email, req.UserType)
 
-    if len(req.Roles) == 0 {
-        req.Roles = []string{"customer"}
-    }
+	if req.UserType == "admin" || req.UserType == "superadmin" {
+		fail("Signup error", nil)
+		return
+	}
 
-    tx, err := db.DB.Begin()
-    if err != nil {
-        fail("begin_tx", err)
-        return
-    }
+	tx, err := db.DB.Begin()
+	if err != nil {
+		fail("Signup error", err)
+		return
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
 
-    defer func() {
-        if err != nil {
-            _ = tx.Rollback()
-        }
-    }()
+	var userID int
+	err = tx.QueryRow(`SELECT id FROM signup WHERE email=$1`, req.Email).Scan(&userID)
+	if err != nil && err != sql.ErrNoRows {
+		fail("Signup error", err)
+		return
+	}
 
-    // insert user
-    var userID int
-    err = tx.QueryRow(`
-        INSERT INTO signup (email, password_hash)
-        VALUES ($1,$2)
-        RETURNING id
-    `,
-        req.Email,
-        helpers.HashPassword(req.Password),
-    ).Scan(&userID)
+	isNewUser := err == sql.ErrNoRows
+	if isNewUser {
+		err = tx.QueryRow(`
+			INSERT INTO signup (email, password_hash)
+			VALUES ($1,$2)
+			RETURNING id
+		`, req.Email, helpers.HashPassword(req.Password)).Scan(&userID)
+		if err != nil {
+			fail("Signup error", err)
+			return
+		}
+		log.Printf("[LOG] New user inserted: userID=%d\n", userID)
+	} else {
+		log.Printf("[LOG] Existing user found: userID=%d\n", userID)
+	}
 
-    if err != nil {
-        if strings.Contains(err.Error(), "duplicate") {
-            fail("duplicate_email", err)
-        } else {
-            fail("insert_user", err)
-        }
-        return
-    }
+	// Check if user already has this role
+	var roleID int
+	err = tx.QueryRow(`SELECT id FROM roles WHERE name=$1`, req.UserType).Scan(&roleID)
+	if err != nil {
+		fail("Signup error", err)
+		return
+	}
 
-    // assign roles
-    seen := map[string]bool{}
+	var exists bool
+	if !isNewUser {
+		err = tx.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM user_roles WHERE user_id=$1 AND role_id=$2
+			)
+		`, userID, roleID).Scan(&exists)
+		if err != nil {
+			fail("Signup error", err)
+			return
+		}
+		if exists {
+			fail("Signup error", nil)
+			return
+		}
+	}
 
-    for _, roleName := range req.Roles {
+	// Assign role
+	_, err = tx.Exec(`
+		INSERT INTO user_roles (user_id, role_id)
+		VALUES ($1,$2)
+		ON CONFLICT DO NOTHING
+	`, userID, roleID)
+	if err != nil {
+		fail("Signup error", err)
+		return
+	}
+	log.Printf("[LOG] Role %s assigned to user %d\n", req.UserType, userID)
 
-        if seen[roleName] {
-            continue
-        }
-        seen[roleName] = true
+	// Verification code
+	code := helpers.GenerateVerificationCode(req.Email)
+	_, err = tx.Exec(`
+		INSERT INTO email_verifications (signup_id, verification_code, expires_at)
+		VALUES ($1,$2,NOW()+INTERVAL '10 minutes')
+		ON CONFLICT (signup_id)
+		DO UPDATE SET
+			verification_code=EXCLUDED.verification_code,
+			expires_at=EXCLUDED.expires_at,
+			created_at=NOW()
+	`, userID, code)
+	if err != nil {
+		fail("Signup error", err)
+		return
+	}
 
-        // prevent privilege escalation
-        if roleName == "admin" || roleName == "superadmin" {
-            fail("forbidden_role_attempt", nil)
-            return
-        }
+	if err = tx.Commit(); err != nil {
+		fail("Signup error", err)
+		return
+	}
 
-        var roleID int
-        err = tx.QueryRow(
-            "SELECT id FROM roles WHERE name=$1",
-            roleName,
-        ).Scan(&roleID)
+	if err := helpers.SendVerificationEmail(req.Email, code); err != nil {
+		fail("Signup error", err)
+		return
+	}
 
-        if err == sql.ErrNoRows {
-            fail("invalid_role", nil)
-            return
-        }
-        if err != nil {
-            fail("role_lookup", err)
-            return
-        }
-
-        _, err = tx.Exec(`
-            INSERT INTO user_roles (user_id, role_id)
-            VALUES ($1,$2)
-        `, userID, roleID)
-
-        if err != nil {
-            fail("insert_user_role", err)
-            return
-        }
-    }
-
-    // verification
-    code := helpers.GenerateVerificationCode(req.Email)
-
-    _, err = tx.Exec(`
-        INSERT INTO email_verifications (signup_id, verification_code, expires_at)
-        VALUES ($1,$2,NOW()+INTERVAL '10 minutes')
-        ON CONFLICT (signup_id)
-        DO UPDATE SET
-            verification_code=EXCLUDED.verification_code,
-            expires_at=EXCLUDED.expires_at,
-            created_at=NOW()
-    `, userID, code)
-
-    if err != nil {
-        fail("verification_insert", err)
-        return
-    }
-
-    err = tx.Commit()
-    if err != nil {
-        fail("commit", err)
-        return
-    }
-
-    // send email AFTER commit
-    if err := helpers.SendVerificationEmail(req.Email, code); err != nil {
-        log.Println("Email send fail:", err)
-        http.Error(w, "Signup failed", http.StatusBadRequest)
-        return
-    }
-
-    json.NewEncoder(w).Encode(map[string]string{
-        "message": "Signup successful",
-    })
+	log.Printf("[LOG] Verification email sent to %s\n", req.Email)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Signup successful, verification email sent",
+	})
 }

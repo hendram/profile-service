@@ -6,8 +6,8 @@ import (
     "net/http"
     "time"
 
-    "patienttracker/db"
-    "patienttracker/helpers"
+    "onlineshop/db"
+    "onlineshop/helpers"
 )
 
 func VerifyHandler(w http.ResponseWriter, r *http.Request) {

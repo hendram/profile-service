@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
-        "patienttracker/db"
+        "onlineshop/db"
 )
 
 type AppointmentRequest struct {
