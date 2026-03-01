@@ -8,8 +8,8 @@ import (
         "net/http"
         "time"
 
-        "onlineshop/db"
-        "onlineshop/middleware"
+        "profile-service/db"
+        "profile-service/middleware"
 )
 
 type ProfileResponse struct {

@@ -4,10 +4,10 @@ import (
     "log"
     "net/http"
 
-    "onlineshop/handlers"
-    "onlineshop/middleware"
-    "onlineshop/db"
-    "onlineshop/env"
+    "profile-service/handlers"
+    "profile-service/middleware"
+    "profile-service/db"
+    "profile-service/env"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 mux.Handle(
 	"/profile",
 	middleware.JWTAuth(
-		middleware.RequireRoles("customer", "seller")(
+		middleware.RequireRoles("buzzer")(
 			http.HandlerFunc(handlers.ProfileHandler),
 		),
 	),

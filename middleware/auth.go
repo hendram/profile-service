@@ -8,6 +8,15 @@ import (
 	"profile-service/helpers"
 )
 
+type contextKey string
+
+const (
+    ContextRoles  contextKey = "roles"
+    ContextUserID contextKey = "user_id"
+    ContextEmail  contextKey = "email"
+)
+
+
 func JWTAuth(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
