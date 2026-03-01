@@ -17,9 +17,6 @@ func main() {
 
     mux := http.NewServeMux()
 
-    mux.HandleFunc("/signup", handlers.SignupHandler)
-    mux.HandleFunc("/verify", handlers.VerifyHandler)
-    mux.HandleFunc("/signin", handlers.SigninHandler)
 
 mux.Handle(
 	"/profile",
