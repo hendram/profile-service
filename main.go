@@ -27,6 +27,6 @@ mux.Handle(
 	),
 )
 
-    log.Println("Server running on :80")
-    log.Fatal(http.ListenAndServe(":80", middleware.CORS(mux)))
+    log.Println("Server running on :9000")
+    log.Fatal(http.ListenAndServe(":9000", middleware.CORS(mux)))
 }
