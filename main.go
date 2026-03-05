@@ -18,11 +18,18 @@ func main() {
     mux := http.NewServeMux()
 
 
-mux.Handle(
-	"/profile",
+mux.Handle("/profile",
 	middleware.JWTAuth(
 		middleware.RequireRoles("buzzer")(
 			http.HandlerFunc(handlers.ProfileHandler),
+		),
+	),
+)
+
+mux.Handle("/profile/create",
+	middleware.JWTAuth(
+		middleware.RequireRoles("buzzer")(
+			http.HandlerFunc(handlers.CreateProfileHandler),
 		),
 	),
 )

@@ -1,113 +1,140 @@
 package helpers
 
 import (
-	"crypto/rsa"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"math/big"
-	"net/http"
+        "crypto/rsa"
+        "encoding/base64"
+        "encoding/json"
+        "errors"
+        "log"
+        "math/big"
+        "net/http"
 
-	"github.com/golang-jwt/jwt/v5"
+        "github.com/golang-jwt/jwt/v5"
 )
 
 var jwks map[string]*rsa.PublicKey
 
 type jwk struct {
-	Kid string `json:"kid"`
-	N   string `json:"n"`
-	E   string `json:"e"`
+        Kid string `json:"kid"`
+        N   string `json:"n"`
+        E   string `json:"e"`
 }
 
 type jwksResp struct {
-	Keys []jwk `json:"keys"`
+        Keys []jwk `json:"keys"`
 }
 
 func fetchJWKS() error {
 
-	resp, err := http.Get("http://auth-service:8080/.well-known/jwks.json")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+        log.Println("Fetching JWKS from auth service")
 
-	var data jwksResp
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return err
-	}
+        resp, err := http.Get("http://localhost:8080/.well-known/jwks.json")
+        if err != nil {
+                log.Println("JWKS fetch failed:", err)
+                return err
+        }
+        defer resp.Body.Close()
 
-	jwks = map[string]*rsa.PublicKey{}
+        var data jwksResp
+        if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+                log.Println("JWKS decode failed:", err)
+                return err
+        }
 
-	for _, k := range data.Keys {
+        jwks = map[string]*rsa.PublicKey{}
 
-		nBytes, _ := base64.RawURLEncoding.DecodeString(k.N)
-		eBytes, _ := base64.RawURLEncoding.DecodeString(k.E)
+        for _, k := range data.Keys {
 
-		n := new(big.Int).SetBytes(nBytes)
-		e := int(new(big.Int).SetBytes(eBytes).Int64())
+                nBytes, _ := base64.RawURLEncoding.DecodeString(k.N)
+                eBytes, _ := base64.RawURLEncoding.DecodeString(k.E)
 
-		jwks[k.Kid] = &rsa.PublicKey{N: n, E: e}
-	}
+                n := new(big.Int).SetBytes(nBytes)
+                e := int(new(big.Int).SetBytes(eBytes).Int64())
 
-	return nil
+                jwks[k.Kid] = &rsa.PublicKey{N: n, E: e}
+
+                log.Println("Loaded JWKS key:", k.Kid)
+        }
+
+        return nil
 }
 
 func getKey(token *jwt.Token) (interface{}, error) {
 
-	kid, ok := token.Header["kid"].(string)
-	if !ok {
-		return nil, errors.New("no kid")
-	}
+        kid, ok := token.Header["kid"].(string)
+        if !ok {
+                log.Println("JWT error: no kid in header")
+                return nil, errors.New("no kid")
+        }
 
-	key := jwks[kid]
-	if key == nil {
+        log.Println("JWT header kid:", kid)
 
-		if err := fetchJWKS(); err != nil {
-			return nil, err
-		}
+        key := jwks[kid]
+        if key == nil {
 
-		key = jwks[kid]
-	}
+                log.Println("Key not cached, refetching JWKS")
 
-	if key == nil {
-		return nil, errors.New("unknown kid")
-	}
+                if err := fetchJWKS(); err != nil {
+                        return nil, err
+                }
 
-	return key, nil
+                key = jwks[kid]
+        }
+
+        if key == nil {
+                log.Println("JWT error: unknown kid:", kid)
+                return nil, errors.New("unknown kid")
+        }
+
+        return key, nil
 }
 
 func VerifyJWT(tokenStr string) (jwt.MapClaims, error) {
 
-	if jwks == nil {
-		if err := fetchJWKS(); err != nil {
-			return nil, err
-		}
-	}
+        if jwks == nil {
+                if err := fetchJWKS(); err != nil {
+                        return nil, err
+                }
+        }
 
-	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+        token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 
-		if t.Method.Alg() != "RS256" {
-			return nil, errors.New("invalid alg")
-		}
+                log.Println("JWT alg:", t.Method.Alg())
 
-		return getKey(t)
-	})
+                if t.Method.Alg() != "RS256" {
+                        log.Println("JWT error: invalid algorithm")
+                        return nil, errors.New("invalid alg")
+                }
 
-	if err != nil || !token.Valid {
-		return nil, errors.New("invalid token")
-	}
+                return getKey(t)
+        })
 
-	claims := token.Claims.(jwt.MapClaims)
+        if err != nil {
+                log.Println("JWT parse error:", err)
+                return nil, err
+        }
 
-	// issuer check
-	if claims["iss"] != "auth-service" {
-		return nil, errors.New("invalid issuer")
-	}
+        if !token.Valid {
+                log.Println("JWT invalid")
+                return nil, errors.New("invalid token")
+        }
 
-	// audience check
-	if claims["aud"] != "buzzer-service" {
-		return nil, errors.New("invalid audience")
-	}
+        claims := token.Claims.(jwt.MapClaims)
 
-	return claims, nil
+        log.Println("JWT claims:", claims)
+
+        if claims["iss"] != "auth-service" {
+                log.Println("JWT issuer mismatch:", claims["iss"])
+                return nil, errors.New("invalid issuer")
+        }
+
+        if claims["aud"] != "buzzer-service" {
+                log.Println("JWT audience mismatch:", claims["aud"])
+                return nil, errors.New("invalid audience")
+        }
+
+        log.Println("JWT verified successfully")
+
+        return claims, nil
 }
+
