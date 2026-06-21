@@ -20,7 +20,7 @@ func main() {
 
 mux.Handle("/profile",
 	middleware.JWTAuth(
-		middleware.RequireRoles("buzzer")(
+		middleware.RequireRoles("seller")(
 			http.HandlerFunc(handlers.ProfileHandler),
 		),
 	),
@@ -28,7 +28,7 @@ mux.Handle("/profile",
 
 mux.Handle("/profile/create",
 	middleware.JWTAuth(
-		middleware.RequireRoles("buzzer")(
+		middleware.RequireRoles("seller")(
 			http.HandlerFunc(handlers.CreateProfileHandler),
 		),
 	),
